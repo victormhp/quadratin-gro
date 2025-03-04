@@ -3,7 +3,6 @@ package scrapper
 import (
 	"encoding/csv"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -11,7 +10,7 @@ import (
 	"github.com/gocolly/colly"
 )
 
-func writeNews(writer csv.Writer, newsList []*News) {
+func writeNews(writer *csv.Writer, newsList []*News) {
 	for _, news := range newsList {
 		err := writer.Write([]string{
 			news.Title,
@@ -28,7 +27,7 @@ func writeNews(writer csv.Writer, newsList []*News) {
 	}
 }
 
-func scrapeNews(wg *sync.WaitGroup, category string, url string, ch chan<- []*News) {
+func scrapeNews(wg *sync.WaitGroup, category string, ch chan<- []*News) {
 	defer wg.Done()
 
 	var newsList []*News
@@ -51,17 +50,14 @@ func scrapeNews(wg *sync.WaitGroup, category string, url string, ch chan<- []*Ne
 	// })
 
 	c.OnHTML("div.q-content", func(e *colly.HTMLElement) {
-		var dateBuilder strings.Builder
-		dateBuilder.WriteString(e.ChildText("div.date"))
-		dateBuilder.WriteString(e.ChildText(" "))
-		dateBuilder.WriteString(e.ChildText("div.hour"))
-
 		author := "-"
 		redaction := e.ChildText("div.q-content__redacted")
 		parts := strings.Split(redaction, "/")
 		if len(parts) > 0 {
 			author = parts[0]
 		}
+
+		date := e.ChildText("div.date") + " " + e.ChildText("div.hour")
 
 		content := ""
 		e.ForEach("div p", func(_ int, p *colly.HTMLElement) {
@@ -72,7 +68,7 @@ func scrapeNews(wg *sync.WaitGroup, category string, url string, ch chan<- []*Ne
 			Title:   e.ChildText("h1"),
 			Tag:     category,
 			Author:  author,
-			Date:    dateBuilder.String(),
+			Date:    date,
 			Url:     e.Request.URL.String(),
 			Image:   e.ChildAttr("img", "src"),
 			Content: content,
@@ -82,9 +78,10 @@ func scrapeNews(wg *sync.WaitGroup, category string, url string, ch chan<- []*Ne
 	})
 
 	c.OnRequest(func(r *colly.Request) {
-		log.Println("Visiting", r.URL)
+		fmt.Println("Visiting", r.URL)
 	})
 
+	url := newsUrl + category
 	c.Visit(url)
 
 	ch <- newsList
@@ -114,9 +111,9 @@ func GetNews() {
 	var wg sync.WaitGroup
 	ch := make(chan []*News, len(newsCategories))
 
-	for category, url := range newsCategories {
+	for _, category := range newsCategories {
 		wg.Add(1)
-		go scrapeNews(&wg, category, url, ch)
+		go scrapeNews(&wg, category, ch)
 	}
 
 	go func() {
@@ -125,6 +122,6 @@ func GetNews() {
 	}()
 
 	for newsList := range ch {
-		writeNews(*csvWriter, newsList)
+		writeNews(csvWriter, newsList)
 	}
 }
