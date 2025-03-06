@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	scrapper.GetNews()
+	scraper.GetNews()
 }

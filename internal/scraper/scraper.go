@@ -1,11 +1,14 @@
-package scrapper
+package scraper
 
 import (
 	"encoding/csv"
 	"fmt"
+	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gocolly/colly"
 )
@@ -27,29 +30,63 @@ func writeNews(writer *csv.Writer, newsList []*News) {
 	}
 }
 
-func scrapeNews(wg *sync.WaitGroup, category string, ch chan<- []*News) {
+func getTotalPages(url string) int {
+	var lastPage string
+
+	pageCollector := colly.NewCollector()
+
+	pageCollector.OnHTML("nav.pagination div.nav-links", func(e *colly.HTMLElement) {
+		lastPage = e.ChildText("a.page-numbers:nth-last-child(2)")
+	})
+
+	pageCollector.Visit(url)
+
+	if lastPage == "" {
+		return 1
+	}
+
+	// Last page can be in "2,345" format, including a ","
+	lastPageParsed := strings.ReplaceAll(lastPage, ",", "")
+	num, err := strconv.Atoi(lastPageParsed)
+	if err != nil {
+		return 1
+	}
+
+	return num
+}
+
+func scrapeNews(wg *sync.WaitGroup, url string, category string, ch chan<- []*News) {
 	defer wg.Done()
 
 	var newsList []*News
 
 	c := colly.NewCollector(
-		colly.CacheDir("./quadrantin_cache"),
 		colly.AllowedDomains("guerrero.quadratin.com.mx"),
+		colly.Async(true),
 	)
 
-	c.OnHTML("article.q-notice a[href]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		e.Request.Visit(link)
+	c.Limit(&colly.LimitRule{
+		DomainGlob:  "*.quadratin.com.mx",
+		Parallelism: 2,
+		Delay:       5 * time.Second,
 	})
 
-	// c.OnHTML("a.next.page-numbers[href]", func(e *colly.HTMLElement) {
-	// 	nextLink := e.Attr("href")
-	// 	if nextLink != "" {
-	// 		e.Request.Visit(nextLink)
-	// 	}
-	// })
+	c.SetRequestTimeout(60 * time.Second)
 
-	c.OnHTML("div.q-content", func(e *colly.HTMLElement) {
+	detailCollector := c.Clone()
+
+	c.OnHTML("section.q-main-component", func(e *colly.HTMLElement) {
+		e.ForEach("article.q-notice", func(_ int, news *colly.HTMLElement) {
+			link := news.ChildAttr("a:nth-child(2)", "href")
+			tag := news.ChildText("div.tag")
+			parsedTag := parseSpanishWord(tag)
+			if parsedTag == category {
+				detailCollector.Visit(link)
+			}
+		})
+	})
+
+	detailCollector.OnHTML("div.q-content", func(e *colly.HTMLElement) {
 		author := "-"
 		redaction := e.ChildText("div.q-content__redacted")
 		parts := strings.Split(redaction, "/")
@@ -74,15 +111,24 @@ func scrapeNews(wg *sync.WaitGroup, category string, ch chan<- []*News) {
 			Content: content,
 		}
 		newsList = append(newsList, news)
-		// news.PrintNews()
+		news.PrintNews()
 	})
 
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting", r.URL)
+		fmt.Println("Visiting Page: ", r.URL)
 	})
 
-	url := newsUrl + category
+	detailCollector.OnRequest(func(r *colly.Request) {
+		fmt.Println("Visiting News: ", r.URL)
+	})
+
+	c.OnError(func(_ *colly.Response, err error) {
+		log.Println("Something went wrong:", err)
+	})
+
 	c.Visit(url)
+	c.Wait()
+	detailCollector.Wait()
 
 	ch <- newsList
 }
@@ -103,7 +149,6 @@ func GetNews() {
 		"Author",
 		"Date",
 		"Url",
-		"Hour",
 		"Image",
 		"Content",
 	})
@@ -112,8 +157,13 @@ func GetNews() {
 	ch := make(chan []*News, len(newsCategories))
 
 	for _, category := range newsCategories {
-		wg.Add(1)
-		go scrapeNews(&wg, category, ch)
+		url := newsUrl + category + "/"
+		totalPages := getTotalPages(url)
+		for p := 1; p <= totalPages; p++ {
+			wg.Add(1)
+			pageUrl := url + "page/" + strconv.Itoa(p) + "/"
+			go scrapeNews(&wg, pageUrl, category, ch)
+		}
 	}
 
 	go func() {
