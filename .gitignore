@@ -21,6 +21,5 @@ go.work.sum
 # env file
 .env
 
-# Scraper cache
-quadrantin_cache/
+# Data
 *.csv
