@@ -15,63 +15,11 @@ import (
 	"github.com/victormhp/qudratin-gro/internal/models"
 )
 
-const newsUrl = "https://guerrero.quadratin.com.mx/"
-
-func getCategories() []*models.Category {
-	var categories []*models.Category
-
-	c := colly.NewCollector(
-		colly.AllowedDomains("guerrero.quadratin.com.mx"),
-	)
-
-	c.OnHTML("nav.q-menu ul", func(e *colly.HTMLElement) {
-		e.ForEach("li:nth-child(n+3)", func(i int, a *colly.HTMLElement) {
-			category := a.ChildText("a")
-			parsedCategory := parseSpanishWord(category)
-			newCategory := &models.Category{Id: i + 1, Name: parsedCategory}
-			categories = append(categories, newCategory)
-		})
-	})
-
-	c.Visit(newsUrl)
-
-	return categories
-}
-
-func writeCategoriesToCsv(categories []*models.Category) error {
-	csvFile, err := os.Create("data/categories.csv")
-	if err != nil {
-		return fmt.Errorf("Error while creating file: %w", err)
-	}
-	defer csvFile.Close()
-
-	csvWriter := csv.NewWriter(csvFile)
-	defer csvWriter.Flush()
-
-	if err := csvWriter.Write([]string{
-		"id",
-		"name",
-	}); err != nil {
-		return fmt.Errorf("Error writing header: %w", err)
-	}
-
-	for _, c := range categories {
-		err := csvWriter.Write([]string{
-			strconv.Itoa(c.Id),
-			c.Name,
-		})
-		if err != nil {
-			return fmt.Errorf("Error writing data to CSV: %w", err)
-		}
-	}
-
-	return nil
-}
-
 func scrapCategory(
 	wg *sync.WaitGroup,
 	category *models.Category,
 	ch chan<- []*models.News,
+	pages ...int,
 ) {
 	defer wg.Done()
 
@@ -96,6 +44,9 @@ func scrapCategory(
 	var pageWg sync.WaitGroup
 	limiter := make(chan struct{}, 2)
 
+	if pages[0] != 0 {
+		totalPages = pages[0]
+	}
 	for p := 1; p <= totalPages; p++ {
 		pageWg.Add(1)
 		limiter <- struct{}{}
@@ -161,11 +112,12 @@ func scrapeNews(url string, category *models.Category) []*models.News {
 		content := ""
 		e.ForEach("div p", func(_ int, p *colly.HTMLElement) {
 			content += p.Text + "\n"
+			content = strings.ReplaceAll(strings.TrimSpace(content), "\"", "'")
 		})
 
 		news := &models.News{
-			Title:      e.ChildText("h1"),
 			CategoryId: category.Id,
+			Title:      e.ChildText("h1"),
 			Author:     author,
 			Date:       date,
 			Url:        e.Request.URL.String(),
@@ -194,13 +146,18 @@ func scrapeNews(url string, category *models.Category) []*models.News {
 	return newsList
 }
 
-func getNews(categories []*models.Category) []*models.News {
+func getNews(categories []*models.Category, pages ...int) []*models.News {
 	var wg sync.WaitGroup
 	ch := make(chan []*models.News, len(categories))
 
+	page := 0
+	if len(pages) > 0 {
+		page = pages[0]
+	}
+
 	for _, category := range categories {
 		wg.Add(1)
-		go scrapCategory(&wg, category, ch)
+		go scrapCategory(&wg, category, ch, page)
 	}
 
 	go func() {
@@ -227,19 +184,21 @@ func writeNewsToCsv(news []*models.News) error {
 	defer csvWriter.Flush()
 
 	if err := csvWriter.Write([]string{
-		"CategoryId",
-		"Title",
-		"Author",
-		"Date",
-		"Url",
-		"Image",
-		"Content",
+		"id",
+		"category_id",
+		"title",
+		"author",
+		"date",
+		"url",
+		"image",
+		"content",
 	}); err != nil {
 		return fmt.Errorf("Error writing header: %w", err)
 	}
 
-	for _, n := range news {
+	for i, n := range news {
 		if err := csvWriter.Write([]string{
+			strconv.Itoa(i + 1),
 			strconv.Itoa(n.CategoryId),
 			n.Title,
 			n.Author,
