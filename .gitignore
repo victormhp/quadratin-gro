@@ -26,3 +26,7 @@ bin/
 
 # air
 tmp/
+
+# data
+*.csv
+*.db
