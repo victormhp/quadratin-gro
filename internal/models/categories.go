@@ -3,8 +3,8 @@ package models
 import "fmt"
 
 type Category struct {
-	Id   int
-	Name string
+	Id   int64    `json:"id"`
+	Name string `json:"name"`
 }
 
 func (c *Category) PrintCategory() {

@@ -3,14 +3,14 @@ package models
 import "fmt"
 
 type News struct {
-	Id         int
-	CategoryId int
-	Title      string
-	Author     string
-	Date       string
-	Url        string
-	Image      string
-	Content    string
+	Id         int64  `json:"id"`
+	CategoryId int64  `json:"category_id"`
+	Title      string `json:"title"`
+	Author     string `json:"author"`
+	Date       string `json:"date"`
+	Url        string `json:"url"`
+	Image      string `json:"image"`
+	Content    string `json:"content"`
 }
 
 func (n *News) PrintNews() {
